@@ -46,9 +46,10 @@
           clearable
           style="max-width: 300px;"
         />
+        <el-button :icon="Refresh" @click="loadData">刷新统计</el-button>
       </div>
 
-      <el-table :data="filteredStudents" stripe style="width: 100%">
+      <el-table :data="filteredStudents" stripe style="width: 100%" @sort-change="onSortChange">
         <el-table-column prop="id" label="编号" width="80" />
         <el-table-column prop="name" label="姓名" width="120" />
         <el-table-column prop="phone" label="电话" width="140" />
@@ -59,6 +60,30 @@
               :percentage="row.course_count > 0 ? Math.round((row.used_count / row.course_count) * 100) : 0"
               :format="() => `${row.used_count}/${row.course_count}次`"
             />
+          </template>
+        </el-table-column>
+        <el-table-column label="在制作品" width="100" sortable>
+          <template #default="{ row }">
+            <el-tag v-if="rowStats[row.id]?.inProgress > 0" type="warning">
+              {{ rowStats[row.id]?.inProgress || 0 }}
+            </el-tag>
+            <span v-else style="color: #909399;">0</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="作品总数" width="100" sortable>
+          <template #default="{ row }">
+            {{ rowStats[row.id]?.totalWorks || 0 }}
+          </template>
+        </el-table-column>
+        <el-table-column label="欠款" width="120" sortable>
+          <template #default="{ row }">
+            <el-tag 
+              v-if="rowStats[row.id]?.hasDebt" 
+              type="danger"
+            >
+              ¥{{ rowStats[row.id]?.totalDebt?.toFixed(2) || '0.00' }}
+            </el-tag>
+            <span v-else style="color: #67c23a;">无欠款</span>
           </template>
         </el-table-column>
         <el-table-column prop="preferred_glaze" label="偏好釉色" width="140">
@@ -121,14 +146,17 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search, Edit, Delete } from '@element-plus/icons-vue'
-import { db } from '../utils/api'
+import { Plus, Search, Edit, Delete, Refresh } from '@element-plus/icons-vue'
+import { db, studentApi } from '../utils/api'
 
 const students = ref([])
+const works = ref([])
+const fees = ref([])
 const searchKeyword = ref('')
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref(null)
+const rowStats = ref({})
 
 const stats = ref({
   total: 0,
@@ -157,14 +185,60 @@ const filteredStudents = computed(() => {
   )
 })
 
+async function loadRowStats(studentId) {
+  try {
+    const result = await studentApi.getStats(studentId)
+    rowStats.value[studentId] = result
+  } catch (e) {
+    console.error('加载学员统计失败', e)
+    rowStats.value[studentId] = {
+      inProgress: 0,
+      totalWorks: 0,
+      totalDebt: 0,
+      hasDebt: false
+    }
+  }
+}
+
+async function loadAllRowStats() {
+  for (const student of students.value) {
+    await loadRowStats(student.id)
+  }
+}
+
 async function loadData() {
   students.value = await db.getAll('students')
+  works.value = await db.getAll('works')
+  fees.value = await db.getAll('fees')
+  
   stats.value.total = students.value.length
   stats.value.active = students.value.filter(s => s.course_count > s.used_count).length
   stats.value.totalCourses = students.value.reduce((sum, s) => sum + (s.course_count - s.used_count), 0)
+  stats.value.worksCount = works.value.filter(w => w.status !== 'picked').length
   
-  const works = await db.query("SELECT COUNT(*) as cnt FROM works WHERE status != 'picked'")
-  stats.value.worksCount = works[0]?.cnt || 0
+  await loadAllRowStats()
+}
+
+function onSortChange({ prop, order }) {
+  if (prop === '在制作品') {
+    students.value.sort((a, b) => {
+      const aVal = rowStats.value[a.id]?.inProgress || 0
+      const bVal = rowStats.value[b.id]?.inProgress || 0
+      return order === 'ascending' ? aVal - bVal : bVal - aVal
+    })
+  } else if (prop === '作品总数') {
+    students.value.sort((a, b) => {
+      const aVal = rowStats.value[a.id]?.totalWorks || 0
+      const bVal = rowStats.value[b.id]?.totalWorks || 0
+      return order === 'ascending' ? aVal - bVal : bVal - aVal
+    })
+  } else if (prop === '欠款') {
+    students.value.sort((a, b) => {
+      const aVal = rowStats.value[a.id]?.totalDebt || 0
+      const bVal = rowStats.value[b.id]?.totalDebt || 0
+      return order === 'ascending' ? aVal - bVal : bVal - aVal
+    })
+  }
 }
 
 function handleAdd() {
@@ -200,7 +274,7 @@ async function handleSave() {
       await db.update('students', editId.value, form.value)
       ElMessage.success('修改成功')
     } else {
-      await db.create('students', form.value)
+      const result = await db.create('students', form.value)
       ElMessage.success('添加成功')
     }
     dialogVisible.value = false
@@ -212,11 +286,18 @@ async function handleSave() {
 }
 
 async function handleDelete(row) {
+  const studentWorks = works.value.filter(w => w.student_id === row.id)
+  let message = `确定要删除学员"${row.name}"吗？`
+  if (studentWorks.length > 0) {
+    message += ` 该学员有 ${studentWorks.length} 件作品记录。`
+  }
+  
   try {
-    await ElMessageBox.confirm(`确定要删除学员"${row.name}"吗？`, '确认删除', {
+    await ElMessageBox.confirm(message, '确认删除', {
       type: 'warning'
     })
     await db.remove('students', row.id)
+    delete rowStats.value[row.id]
     ElMessage.success('删除成功')
     loadData()
   } catch (e) {

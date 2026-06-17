@@ -71,6 +71,9 @@
               >
                 <div class="kiln-mini-title">{{ kiln.batch_no }}</div>
                 <div class="kiln-mini-info">{{ kiln.temperature }}°C · {{ kiln.duration_hours }}h</div>
+                <div class="kiln-mini-info">
+                  📦 {{ getKilnWorkCount(kiln.id) }}/{{ kiln.capacity }}
+                </div>
               </div>
             </div>
           </div>
@@ -93,8 +96,20 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="kiln_position" label="窑位" width="100" />
-            <el-table-column prop="duration_hours" label="时长(h)" width="100" />
+            <el-table-column prop="kiln_position" label="窑位" width="80" />
+            <el-table-column label="容量" width="100">
+              <template #default="{ row }">
+                <el-progress 
+                  :percentage="Math.round((getKilnWorkCount(row.id) / row.capacity) * 100)" 
+                  :status="getCapacityStatus(row)"
+                  :stroke-width="10"
+                />
+                <div style="text-align: center; font-size: 12px; margin-top: 2px;">
+                  {{ getKilnWorkCount(row.id) }}/{{ row.capacity }}
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="duration_hours" label="时长(h)" width="80" />
             <el-table-column label="状态" width="100">
               <template #default="{ row }">
                 <el-tag :type="getStatusType(row.status)">
@@ -103,7 +118,7 @@
               </template>
             </el-table-column>
             <el-table-column prop="notes" label="备注" show-overflow-tooltip />
-            <el-table-column label="操作" width="240" fixed="right">
+            <el-table-column label="操作" width="320" fixed="right">
               <template #default="{ row }">
                 <el-dropdown trigger="click" @command="(cmd) => handleStatusChange(row, cmd)">
                   <el-button size="small" type="primary">
@@ -111,13 +126,14 @@
                   </el-button>
                   <template #dropdown>
                     <el-dropdown-menu>
-                      <el-dropdown-item command="full" :disabled="row.status === 'full'">标记满窑</el-dropdown-item>
-                      <el-dropdown-item command="firing" :disabled="row.status === 'firing'">开始烧制</el-dropdown-item>
-                      <el-dropdown-item command="completed" :disabled="row.status === 'completed'">烧制完成</el-dropdown-item>
+                      <el-dropdown-item command="full" :disabled="row.status === 'full' || row.status === 'firing' || row.status === 'completed' || row.status === 'cancelled'">标记满窑</el-dropdown-item>
+                      <el-dropdown-item command="firing" :disabled="row.status === 'firing' || row.status === 'completed' || row.status === 'cancelled'">开始烧制</el-dropdown-item>
+                      <el-dropdown-item command="completed" :disabled="row.status === 'completed' || row.status === 'cancelled'">烧制完成</el-dropdown-item>
                       <el-dropdown-item command="cancelled" :disabled="row.status === 'cancelled'">取消排期</el-dropdown-item>
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
+                <el-button size="small" :icon="List" @click="showWorksList(row)">作品</el-button>
                 <el-button size="small" :icon="Edit" @click="handleEdit(row)">编辑</el-button>
                 <el-button size="small" type="danger" :icon="Delete" @click="handleDelete(row)">删除</el-button>
               </template>
@@ -160,6 +176,9 @@
               <el-option label="满窑" value="FULL" />
             </el-select>
           </el-form-item>
+          <el-form-item label="窑炉容量" required>
+            <el-input-number v-model="form.capacity" :min="1" :max="100" style="width: 100%;" />
+          </el-form-item>
           <el-form-item label="预计时长(h)">
             <el-input-number v-model="form.duration_hours" :min="0.5" :step="0.5" style="width: 100%;" />
           </el-form-item>
@@ -178,22 +197,90 @@
         <el-button type="primary" @click="handleSave">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="worksDialogVisible"
+      :title="`窑炉作品清单 - ${currentKiln?.batch_no}`"
+      width="650px"
+      destroy-on-close
+    >
+      <div v-if="currentKiln" class="kiln-works-header">
+        <div class="capacity-info">
+          <el-progress 
+            :percentage="Math.round((getKilnWorkCount(currentKiln.id) / currentKiln.capacity) * 100)" 
+            :status="getCapacityStatus(currentKiln)"
+          />
+          <div style="margin-left: 16px; font-size: 14px;">
+            已装载: <strong>{{ getKilnWorkCount(currentKiln.id) }}</strong> / {{ currentKiln.capacity }} 件
+          </div>
+        </div>
+        <div v-if="canModify" class="tip">
+          <el-alert type="info" :closable="false" title="提示：点击右侧 × 可移除作品" />
+        </div>
+      </div>
+
+      <div v-if="kilnWorks.length > 0" class="works-list">
+        <div 
+          v-for="work in kilnWorks" 
+          :key="work.id" 
+          class="work-item"
+        >
+          <div class="work-avatar">
+            <img v-if="work.photo" :src="work.photo" />
+            <el-icon v-else :size="28"><Picture /></el-icon>
+          </div>
+          <div class="work-info">
+            <div class="work-name">{{ work.name }}</div>
+            <div class="work-meta">
+              👤 {{ getStudentName(work.student_id) }} · 📐 {{ work.size || '未设置' }}
+            </div>
+            <div class="work-meta">
+              <el-tag size="small" :type="work.status === 'bisque' ? 'warning' : 'danger'">
+                {{ work.status === 'bisque' ? '素烧' : '釉烧' }}
+              </el-tag>
+              <span v-if="work.fragile" style="margin-left: 8px; color: #f56c6c;">
+                ⚠️ 易碎
+              </span>
+            </div>
+          </div>
+          <el-button 
+            v-if="canModify"
+            size="small" 
+            type="danger" 
+            :icon="Close" 
+            circle
+            @click="handleRemoveWork(work.id)"
+          />
+        </div>
+      </div>
+      <div v-else class="empty-works">
+        暂无作品，请在作品看板中批量添加
+      </div>
+
+      <template #footer>
+        <el-button @click="worksDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Edit, Delete, ArrowLeft, ArrowRight, ArrowDown, TrendCharts } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, ArrowLeft, ArrowRight, ArrowDown, TrendCharts, List, Close, Picture } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
-import { db, KILN_STATUS } from '../utils/api'
+import { db, KILN_STATUS, kilnApi } from '../utils/api'
 
 const kilns = ref([])
+const works = ref([])
+const students = ref([])
 const activeTab = ref('calendar')
 const filterStatus = ref('')
 const dialogVisible = ref(false)
+const worksDialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref(null)
+const currentKiln = ref(null)
 const currentMonth = ref(dayjs())
 
 const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
@@ -209,10 +296,21 @@ const form = ref({
   batch_no: '',
   temperature: 1180,
   kiln_position: '',
+  capacity: 20,
   duration_hours: 8,
   scheduled_date: '',
   status: 'scheduled',
   notes: ''
+})
+
+const canModify = computed(() => {
+  if (!currentKiln.value) return false
+  return currentKiln.value.status === 'scheduled' || currentKiln.value.status === 'full'
+})
+
+const kilnWorks = computed(() => {
+  if (!currentKiln.value) return []
+  return works.value.filter(w => w.kiln_id === currentKiln.value.id)
 })
 
 const currentMonthLabel = computed(() => {
@@ -265,6 +363,23 @@ function getTempType(temp) {
   return 'danger'
 }
 
+function getKilnWorkCount(kilnId) {
+  return works.value.filter(w => w.kiln_id === kilnId).length
+}
+
+function getStudentName(studentId) {
+  const s = students.value.find(s => s.id === studentId)
+  return s ? s.name : '未知'
+}
+
+function getCapacityStatus(kiln) {
+  const count = getKilnWorkCount(kiln.id)
+  const ratio = count / kiln.capacity
+  if (ratio >= 1) return 'exception'
+  if (ratio >= 0.8) return 'warning'
+  return ''
+}
+
 function prevMonth() {
   currentMonth.value = currentMonth.value.subtract(1, 'month')
 }
@@ -279,6 +394,8 @@ function goToday() {
 
 async function loadData() {
   kilns.value = await db.getAll('kilns')
+  works.value = await db.getAll('works')
+  students.value = await db.getAll('students')
   
   stats.value.scheduled = kilns.value.filter(k => k.status === 'scheduled').length
   stats.value.firing = kilns.value.filter(k => k.status === 'firing').length
@@ -298,6 +415,7 @@ function handleAdd() {
     batch_no: dayjs().format('YYYYMMDD') + '-A',
     temperature: 1180,
     kiln_position: '',
+    capacity: 20,
     duration_hours: 8,
     scheduled_date: dayjs().format('YYYY-MM-DD'),
     status: 'scheduled',
@@ -313,14 +431,75 @@ function handleEdit(row) {
   dialogVisible.value = true
 }
 
+function showWorksList(row) {
+  currentKiln.value = { ...row }
+  worksDialogVisible.value = true
+}
+
+async function handleRemoveWork(workId) {
+  try {
+    await ElMessageBox.confirm('确定要从窑炉中移除该作品吗？移除后作品将退回原状态', '确认移除', {
+      type: 'warning'
+    })
+    const result = await kilnApi.removeWork(currentKiln.value.id, workId)
+    if (result.success) {
+      ElMessage.success(result.message)
+      await loadData()
+      if (currentKiln.value) {
+        const updated = kilns.value.find(k => k.id === currentKiln.value.id)
+        if (updated) currentKiln.value = { ...updated }
+      }
+    } else {
+      ElMessage.error(result.message)
+    }
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error('操作失败')
+      console.error(e)
+    }
+  }
+}
+
 async function handleStatusChange(row, newStatus) {
   try {
-    await db.update('kilns', row.id, { status: newStatus })
-    ElMessage.success(`状态已更新为「${getStatusLabel(newStatus)}」`)
-    loadData()
+    if (newStatus === 'completed') {
+      const workCount = getKilnWorkCount(row.id)
+      await ElMessageBox.confirm(
+        `确认窑炉「${row.batch_no}」烧制完成？将把 ${workCount} 件作品流转到下一状态并自动生成取件提醒。`,
+        '确认完成',
+        { type: 'warning' }
+      )
+      const result = await kilnApi.complete(row.id)
+      if (result.success) {
+        ElMessage.success(result.message)
+        await loadData()
+      } else {
+        ElMessage.error(result.message)
+      }
+    } else if (newStatus === 'cancelled') {
+      const workCount = getKilnWorkCount(row.id)
+      await ElMessageBox.confirm(
+        `确认取消排期「${row.batch_no}」？将把 ${workCount} 件作品退回原状态。`,
+        '确认取消',
+        { type: 'warning' }
+      )
+      const result = await kilnApi.cancel(row.id)
+      if (result.success) {
+        ElMessage.success(result.message)
+        await loadData()
+      } else {
+        ElMessage.error(result.message)
+      }
+    } else {
+      await db.update('kilns', row.id, { status: newStatus })
+      ElMessage.success(`状态已更新为「${getStatusLabel(newStatus)}」`)
+      loadData()
+    }
   } catch (e) {
-    ElMessage.error('更新失败')
-    console.error(e)
+    if (e !== 'cancel') {
+      ElMessage.error('更新失败')
+      console.error(e)
+    }
   }
 }
 
@@ -335,6 +514,10 @@ async function handleSave() {
   }
   if (!form.value.temperature || form.value.temperature <= 0) {
     ElMessage.warning('请设置烧制温度')
+    return
+  }
+  if (!form.value.capacity || form.value.capacity <= 0) {
+    ElMessage.warning('请设置窑炉容量')
     return
   }
 
@@ -355,10 +538,35 @@ async function handleSave() {
 }
 
 async function handleDelete(row) {
+  const workCount = getKilnWorkCount(row.id)
+  let message = `确定要删除排期"${row.batch_no}"吗？`
+  if (workCount > 0) {
+    message += ` 注意：该窑炉中还有 ${workCount} 件作品，删除后这些作品的关联将被清除。`
+  }
+  
   try {
-    await ElMessageBox.confirm(`确定要删除排期"${row.batch_no}"吗？`, '确认删除', {
+    await ElMessageBox.confirm(message, '确认删除', {
       type: 'warning'
     })
+    
+    if (workCount > 0) {
+      const affectedWorks = works.value.filter(w => w.kiln_id === row.id)
+      for (const work of affectedWorks) {
+        if (work.previous_status) {
+          await db.update('works', work.id, {
+            status: work.previous_status,
+            kiln_id: null,
+            previous_status: null
+          })
+        } else {
+          await db.update('works', work.id, {
+            kiln_id: null,
+            previous_status: null
+          })
+        }
+      }
+    }
+    
     await db.remove('kilns', row.id)
     ElMessage.success('删除成功')
     loadData()
@@ -461,5 +669,83 @@ onMounted(loadData)
 .kiln-mini-info {
   color: #7f8c8d;
   font-size: 10px;
+}
+
+.kiln-works-header {
+  margin-bottom: 16px;
+}
+
+.capacity-info {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.capacity-info .el-progress {
+  flex: 1;
+}
+
+.works-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.work-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #f5f7fa;
+  border-radius: 8px;
+  border: 1px solid #e4e7ed;
+}
+
+.work-avatar {
+  width: 50px;
+  height: 50px;
+  border-radius: 8px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: #c0c4cc;
+}
+
+.work-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.work-info {
+  flex: 1;
+}
+
+.work-name {
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 4px;
+}
+
+.work-meta {
+  font-size: 13px;
+  color: #606266;
+  margin-top: 4px;
+}
+
+.empty-works {
+  text-align: center;
+  padding: 40px;
+  color: #909399;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.tip {
+  margin-top: 8px;
 }
 </style>

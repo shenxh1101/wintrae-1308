@@ -132,7 +132,7 @@
     <el-dialog
       v-model="dialogVisible"
       :title="isEdit ? '编辑费用' : '登记费用'"
-      width="550px"
+      width="600px"
       destroy-on-close
     >
       <el-form :model="form" label-width="100px">
@@ -143,15 +143,50 @@
             </el-select>
           </el-form-item>
           <el-form-item label="关联作品">
-            <el-select v-model="form.work_id" placeholder="选择作品（可选）" style="width: 100%;" clearable>
+            <el-select v-model="form.work_id" placeholder="选择作品（可选）" style="width: 100%;" clearable @change="onWorkChange">
               <el-option v-for="w in studentWorks" :key="w.id" :label="w.name" :value="w.id" />
             </el-select>
           </el-form-item>
           <el-form-item label="费用类型" required>
-            <el-select v-model="form.type" style="width: 100%;">
+            <el-select v-model="form.type" style="width: 100%;" @change="onTypeChange">
               <el-option v-for="t in FEE_TYPES" :key="t.value" :label="t.label" :value="t.value" />
             </el-select>
           </el-form-item>
+        </div>
+
+        <div v-if="canAutoCalculate" class="auto-calc-section">
+          <el-alert 
+            type="info" 
+            :closable="false" 
+            title="智能计算费用"
+            style="margin-bottom: 16px;"
+          >
+            <template #default>
+              <div style="margin-top: 8px;">
+                <div v-if="selectedWork">
+                  <div>📦 作品尺寸: {{ selectedWork.size || '未设置' }}</div>
+                  <div>🌡️ 烧制温度: {{ calcTemperature }}℃</div>
+                  <div v-if="calcSizeFactor">📐 尺寸系数: ×{{ calcSizeFactor }}</div>
+                  <div v-if="calcTempFactor">🔥 温度系数: ×{{ calcTempFactor }}</div>
+                  <div style="margin-top: 8px; font-weight: 600;">
+                    建议金额: ¥{{ suggestedAmount.toFixed(2) }}
+                  </div>
+                </div>
+                <el-button 
+                  type="primary" 
+                  size="small" 
+                  :icon="Refresh"
+                  style="margin-top: 8px;"
+                  @click="calculateFee"
+                >
+                  应用建议金额
+                </el-button>
+              </div>
+            </template>
+          </el-alert>
+        </div>
+
+        <div class="form-row">
           <el-form-item label="金额(¥)" required>
             <el-input-number v-model="form.amount" :min="0" :precision="2" style="width: 100%;" />
           </el-form-item>
@@ -175,11 +210,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Edit, Delete, Goods } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Goods, Refresh } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
-import { db, FEE_TYPES } from '../utils/api'
+import { db, FEE_TYPES, feeApi } from '../utils/api'
 
 const fees = ref([])
 const students = ref([])
@@ -190,6 +225,10 @@ const filterPaid = ref('')
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref(null)
+const suggestedAmount = ref(0)
+const calcSizeFactor = ref(1)
+const calcTempFactor = ref(1)
+const calcTemperature = ref(1180)
 
 const stats = ref({
   totalIncome: 0,
@@ -206,6 +245,17 @@ const form = ref({
   paid: 0,
   payment_date: '',
   notes: ''
+})
+
+const canAutoCalculate = computed(() => {
+  if (isEdit.value) return false
+  if (!form.value.work_id) return false
+  return form.value.type === 'material' || form.value.type === 'firing'
+})
+
+const selectedWork = computed(() => {
+  if (!form.value.work_id) return null
+  return works.value.find(w => w.id === form.value.work_id)
 })
 
 const studentWorks = computed(() => {
@@ -295,6 +345,54 @@ function onStudentChange() {
   form.value.work_id = null
 }
 
+function onWorkChange() {
+  if (canAutoCalculate.value) {
+    calculateFee()
+  }
+}
+
+function onTypeChange() {
+  if (canAutoCalculate.value) {
+    calculateFee()
+  }
+}
+
+async function calculateFee() {
+  if (!form.value.work_id) return
+  if (!form.value.type) return
+  
+  let temperature = 1180
+  if (form.value.type === 'firing') {
+    temperature = calcTemperature.value
+  }
+  
+  try {
+    const result = await feeApi.calculate(form.value.work_id, form.value.type, temperature)
+    if (result.success) {
+      suggestedAmount.value = result.amount
+      
+      if (selectedWork.value && selectedWork.value.size) {
+        const sizeMatch = selectedWork.value.size.match(/(\d+(?:\.\d+)?)\s*cm/i)
+        if (sizeMatch) {
+          const maxDim = parseFloat(sizeMatch[1])
+          if (maxDim > 30) calcSizeFactor.value = 2.5
+          else if (maxDim > 20) calcSizeFactor.value = 1.8
+          else if (maxDim > 10) calcSizeFactor.value = 1.3
+          else calcSizeFactor.value = 1
+        }
+      }
+      
+      if (form.value.type === 'firing') {
+        if (temperature >= 1240) calcTempFactor.value = 1.5
+        else if (temperature >= 1180) calcTempFactor.value = 1.2
+        else calcTempFactor.value = 1
+      }
+    }
+  } catch (e) {
+    console.error('计算费用失败', e)
+  }
+}
+
 async function loadData() {
   fees.value = await db.getAll('fees')
   students.value = await db.getAll('students')
@@ -309,6 +407,7 @@ async function loadData() {
 function handleAdd() {
   isEdit.value = false
   editId.value = null
+  suggestedAmount.value = 0
   form.value = {
     student_id: null,
     work_id: null,
@@ -390,5 +489,20 @@ async function handleDelete(row) {
   }
 }
 
+watch(dialogVisible, (val) => {
+  if (!val) {
+    suggestedAmount.value = 0
+  }
+})
+
 onMounted(loadData)
 </script>
+
+<style scoped>
+.auto-calc-section {
+  background: #f5f7fa;
+  padding: 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+</style>
