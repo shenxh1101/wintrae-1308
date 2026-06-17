@@ -108,12 +108,13 @@ const mockApi = {
             }
           }
           if (where.includes(' not in ')) {
-            const inMatch = where.match(/not in\s*\(\s*select\s+(\w+)\s+from\s+(\w+)/i)
+            const inMatch = where.match(/(\w+)\s+not in\s*\(\s*select\s+(\w+)\s+from\s+(\w+)/i)
             if (inMatch) {
-              const subField = inMatch[1]
-              const subTable = inMatch[2]
+              const outerField = inMatch[1]
+              const subField = inMatch[2]
+              const subTable = inMatch[3]
               const subIds = (mockData[subTable] || []).map(item => item[subField])
-              rows = rows.filter(r => !subIds.includes(r[subField]))
+              rows = rows.filter(r => !subIds.includes(r[outerField]))
             }
           }
           if (where.includes('student_id =')) {

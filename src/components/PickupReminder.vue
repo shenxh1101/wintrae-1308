@@ -285,20 +285,24 @@ async function loadData() {
 
 async function handleGenerateReminders() {
   try {
-    const readyWorks = await db.query(
-      "SELECT * FROM works WHERE status = 'ready' AND id NOT IN (SELECT work_id FROM reminders)"
-    )
+    const allWorks = await db.getAll('works')
+    const readyWorks = allWorks.filter(w => w.status === 'ready')
     
-    if (readyWorks.length === 0) {
+    const existingReminders = await db.getAll('reminders')
+    const existingWorkIds = new Set(existingReminders.map(r => r.work_id))
+    
+    const newWorks = readyWorks.filter(w => !existingWorkIds.has(w.id))
+    
+    if (newWorks.length === 0) {
       ElMessage.info('没有新的待取件作品需要生成提醒')
       return
     }
     
-    await ElMessageBox.confirm(`将为 ${readyWorks.length} 件待取件作品生成提醒，是否继续？`, '生成提醒', {
+    await ElMessageBox.confirm(`将为 ${newWorks.length} 件待取件作品生成提醒，是否继续？`, '生成提醒', {
       type: 'info'
     })
     
-    for (const work of readyWorks) {
+    for (const work of newWorks) {
       const message = generateSms({
         student_id: work.student_id,
         work_id: work.id
@@ -311,7 +315,7 @@ async function handleGenerateReminders() {
       })
     }
     
-    ElMessage.success(`成功生成 ${readyWorks.length} 条取件提醒`)
+    ElMessage.success(`成功生成 ${newWorks.length} 条取件提醒`)
     loadData()
   } catch (e) {
     if (e !== 'cancel') {

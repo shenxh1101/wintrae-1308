@@ -62,7 +62,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="在制作品" width="100" sortable>
+        <el-table-column prop="inProgress" label="在制作品" width="100" sortable="custom">
           <template #default="{ row }">
             <el-tag v-if="rowStats[row.id]?.inProgress > 0" type="warning">
               {{ rowStats[row.id]?.inProgress || 0 }}
@@ -70,12 +70,12 @@
             <span v-else style="color: #909399;">0</span>
           </template>
         </el-table-column>
-        <el-table-column label="作品总数" width="100" sortable>
+        <el-table-column prop="totalWorks" label="作品总数" width="100" sortable="custom">
           <template #default="{ row }">
             {{ rowStats[row.id]?.totalWorks || 0 }}
           </template>
         </el-table-column>
-        <el-table-column label="欠款" width="120" sortable>
+        <el-table-column prop="totalDebt" label="欠款" width="120" sortable="custom">
           <template #default="{ row }">
             <el-tag 
               v-if="rowStats[row.id]?.hasDebt" 
@@ -157,6 +157,7 @@ const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref(null)
 const rowStats = ref({})
+const sortState = ref({ key: null, order: null })
 
 const stats = ref({
   total: 0,
@@ -176,13 +177,27 @@ const form = ref({
 })
 
 const filteredStudents = computed(() => {
-  if (!searchKeyword.value) return students.value
-  const kw = searchKeyword.value.toLowerCase()
-  return students.value.filter(s => 
-    s.name.toLowerCase().includes(kw) ||
-    (s.phone && s.phone.includes(kw)) ||
-    (s.wechat && s.wechat.toLowerCase().includes(kw))
-  )
+  let list = students.value
+  if (searchKeyword.value) {
+    const kw = searchKeyword.value.toLowerCase()
+    list = list.filter(s => 
+      s.name.toLowerCase().includes(kw) ||
+      (s.phone && s.phone.includes(kw)) ||
+      (s.wechat && s.wechat.toLowerCase().includes(kw))
+    )
+  }
+  
+  if (sortState.value.key && sortState.value.order) {
+    const key = sortState.value.key
+    const asc = sortState.value.order === 'ascending'
+    list = [...list].sort((a, b) => {
+      const aVal = rowStats.value[a.id]?.[key] || 0
+      const bVal = rowStats.value[b.id]?.[key] || 0
+      return asc ? aVal - bVal : bVal - aVal
+    })
+  }
+  
+  return list
 })
 
 async function loadRowStats(studentId) {
@@ -220,24 +235,10 @@ async function loadData() {
 }
 
 function onSortChange({ prop, order }) {
-  if (prop === '在制作品') {
-    students.value.sort((a, b) => {
-      const aVal = rowStats.value[a.id]?.inProgress || 0
-      const bVal = rowStats.value[b.id]?.inProgress || 0
-      return order === 'ascending' ? aVal - bVal : bVal - aVal
-    })
-  } else if (prop === '作品总数') {
-    students.value.sort((a, b) => {
-      const aVal = rowStats.value[a.id]?.totalWorks || 0
-      const bVal = rowStats.value[b.id]?.totalWorks || 0
-      return order === 'ascending' ? aVal - bVal : bVal - aVal
-    })
-  } else if (prop === '欠款') {
-    students.value.sort((a, b) => {
-      const aVal = rowStats.value[a.id]?.totalDebt || 0
-      const bVal = rowStats.value[b.id]?.totalDebt || 0
-      return order === 'ascending' ? aVal - bVal : bVal - aVal
-    })
+  if (prop && order) {
+    sortState.value = { key: prop, order }
+  } else {
+    sortState.value = { key: null, order: null }
   }
 }
 

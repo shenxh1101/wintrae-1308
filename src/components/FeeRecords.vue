@@ -165,7 +165,19 @@
               <div style="margin-top: 8px;">
                 <div v-if="selectedWork">
                   <div>📦 作品尺寸: {{ selectedWork.size || '未设置' }}</div>
-                  <div>🌡️ 烧制温度: {{ calcTemperature }}℃</div>
+                  <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                    <span>🌡️ 烧制温度:</span>
+                    <el-input-number 
+                      v-model="calcTemperature" 
+                      :min="800" 
+                      :max="1400" 
+                      :step="10" 
+                      size="small" 
+                      style="width: 140px;"
+                      @change="onTemperatureChange"
+                    />
+                    <span>℃</span>
+                  </div>
                   <div v-if="calcSizeFactor">📐 尺寸系数: ×{{ calcSizeFactor }}</div>
                   <div v-if="calcTempFactor">🔥 温度系数: ×{{ calcTempFactor }}</div>
                   <div style="margin-top: 8px; font-weight: 600;">
@@ -214,11 +226,12 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Goods, Refresh } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
-import { db, FEE_TYPES, feeApi } from '../utils/api'
+import { db, FEE_TYPES, feeApi, kilnApi } from '../utils/api'
 
 const fees = ref([])
 const students = ref([])
 const works = ref([])
+const kilns = ref([])
 const filterType = ref('')
 const filterStudent = ref(null)
 const filterPaid = ref('')
@@ -345,7 +358,16 @@ function onStudentChange() {
   form.value.work_id = null
 }
 
-function onWorkChange() {
+async function onWorkChange() {
+  if (form.value.work_id && form.value.type === 'firing') {
+    const work = works.value.find(w => w.id === form.value.work_id)
+    if (work && work.kiln_id) {
+      const kiln = kilns.value.find(k => k.id === work.kiln_id)
+      if (kiln && kiln.temperature) {
+        calcTemperature.value = kiln.temperature
+      }
+    }
+  }
   if (canAutoCalculate.value) {
     calculateFee()
   }
@@ -353,6 +375,12 @@ function onWorkChange() {
 
 function onTypeChange() {
   if (canAutoCalculate.value) {
+    calculateFee()
+  }
+}
+
+function onTemperatureChange() {
+  if (canAutoCalculate.value && form.value.type === 'firing') {
     calculateFee()
   }
 }
@@ -397,6 +425,7 @@ async function loadData() {
   fees.value = await db.getAll('fees')
   students.value = await db.getAll('students')
   works.value = await db.getAll('works')
+  kilns.value = await db.getAll('kilns')
   
   stats.value.totalIncome = fees.value.filter(f => f.paid).reduce((sum, f) => sum + f.amount, 0)
   stats.value.totalDebt = fees.value.filter(f => !f.paid).reduce((sum, f) => sum + f.amount, 0)
@@ -408,6 +437,9 @@ function handleAdd() {
   isEdit.value = false
   editId.value = null
   suggestedAmount.value = 0
+  calcTemperature.value = 1180
+  calcSizeFactor.value = 1
+  calcTempFactor.value = 1
   form.value = {
     student_id: null,
     work_id: null,
